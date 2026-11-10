@@ -14,10 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: 建草稿、上传附件、再正式发布
+      - name: 发布 v1.0.27 完整包
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -25,30 +23,41 @@ jobs:
           {
             set -x
             R="${{ github.repository }}"
-            echo "== clean stray drafts =="
+
+            echo "== 清掉残留草稿 =="
             ids=$(gh api "repos/$R/releases" --jq '.[] | select(.draft == true) | .id' || true)
             for id in $ids; do
               echo "delete draft $id"
               gh api -X DELETE "repos/$R/releases/$id" || true
             done
-            echo "== create draft release on existing tag =="
-            gh api -X POST "repos/$R/releases" \
+
+            echo "== 建草稿 =="
+            resp=$(gh api -X POST "repos/$R/releases" \
               -f tag_name="v1.0.27" \
               -F draft=true \
               -f name="Windhawk 汉化补丁 v1.0.27" \
-              -f body="$(cat RELEASE_NOTES_v1.0.27.md)"
-            echo "== upload assets =="
-            gh release upload v1.0.27 --clobber \
-              "Windhawk-patch-v1.0.27.zip" \
-              "package/windhawk-zh-cn.js" \
-              "package/install.ps1" \
-              "package/uninstall.ps1" \
-              "package/一键安装.bat" \
-              "package/一键卸载.bat" \
-              "package/使用说明.txt" \
-              "SHA256SUMS.txt"
-            echo "== publish =="
-            gh release edit v1.0.27 --draft=false
+              -f body="$(cat RELEASE_NOTES_v1.0.27.md)")
+            rid=$(echo "$resp" | jq -r .id)
+            echo "release id=$rid"
+
+            upload() {
+              f="$1"
+              n=$(basename "$f")
+              enc=$(jq -rn --arg n "$n" '$n|@uri')
+              echo "upload $n -> $rid"
+              gh api -X POST \
+                "https://uploads.github.com/repos/$R/releases/$rid/assets?name=$enc" \
+                -H "Content-Type: application/octet-stream" \
+                --input "$f" > /tmp/asset.json
+              jq -r '.name + " (" + (.size|tostring) + " bytes)"' /tmp/asset.json
+            }
+
+            upload "Windhawk-patch-v1.0.27.zip"
+            upload "SHA256SUMS.txt"
+
+            echo "== 正式发布 =="
+            gh api -X PATCH "repos/$R/releases/$rid" -F draft=false > /tmp/rel.json
+            jq -r '.html_url, .tag_name, (.draft|tostring), (.published_at|tostring)' /tmp/rel.json
             echo "== done =="
           } 2>&1 | tee /tmp/publish.log
 
