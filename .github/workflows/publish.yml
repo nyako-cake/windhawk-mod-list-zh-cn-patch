@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  issues: write
 
 jobs:
   publish:
@@ -16,49 +17,64 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: 清掉没有 tag 的残留草稿
+      - name: 跑发布
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -euo pipefail
-          ids=$(gh api "repos/${{ github.repository }}/releases" --jq '.[] | select(.draft == true) | .id' || true)
-          for id in $ids; do
-            echo "delete draft $id"
-            gh api -X DELETE "repos/${{ github.repository }}/releases/$id" || true
-          done
+          set -o pipefail
+          {
+            set -x
+            echo "== which gh =="
+            command -v gh || true
+            gh --version || true
+            echo "== clean drafts =="
+            ids=$(gh api "repos/${{ github.repository }}/releases" --jq '.[] | select(.draft == true) | .id' || true)
+            for id in $ids; do
+              echo "delete draft $id"
+              gh api -X DELETE "repos/${{ github.repository }}/releases/$id" || true
+            done
+            echo "== tag =="
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            if ! git rev-parse "v1.0.27" >/dev/null 2>&1; then
+              git tag -a v1.0.27 -m "Windhawk 汉化补丁 v1.0.27"
+              git push origin refs/tags/v1.0.27
+            else
+              echo "tag already exists"
+            fi
+            echo "== create release =="
+            if gh release view v1.0.27 >/dev/null 2>&1; then
+              gh release upload v1.0.27 --clobber \
+                "Windhawk-patch-v1.0.27.zip" \
+                "package/windhawk-zh-cn.js" \
+                "package/install.ps1" \
+                "package/uninstall.ps1" \
+                "package/一键安装.bat" \
+                "package/一键卸载.bat" \
+                "package/使用说明.txt" \
+                "SHA256SUMS.txt"
+            else
+              gh release create v1.0.27 \
+                --title "Windhawk 汉化补丁 v1.0.27" \
+                --notes-file "RELEASE_NOTES_v1.0.27.md" \
+                --verify-tag \
+                "Windhawk-patch-v1.0.27.zip" \
+                "package/windhawk-zh-cn.js" \
+                "package/install.ps1" \
+                "package/uninstall.ps1" \
+                "package/一键安装.bat" \
+                "package/一键卸载.bat" \
+                "package/使用说明.txt" \
+                "SHA256SUMS.txt"
+            fi
+            echo "== done =="
+          } 2>&1 | tee /tmp/publish.log
 
-      - name: 建 tag 并发布
+      - name: 失败时把日志存成 Issue
+        if: failure()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if ! git rev-parse "v1.0.27" >/dev/null 2>&1; then
-            git tag -a v1.0.27 -m "Windhawk 汉化补丁 v1.0.27"
-          fi
-          git push origin refs/tags/v1.0.27
-          if gh release view v1.0.27 >/dev/null 2>&1; then
-            echo "release already exists, upload assets only"
-            gh release upload v1.0.27 --clobber \
-              "Windhawk-patch-v1.0.27.zip" \
-              "package/windhawk-zh-cn.js" \
-              "package/install.ps1" \
-              "package/uninstall.ps1" \
-              "package/一键安装.bat" \
-              "package/一键卸载.bat" \
-              "package/使用说明.txt" \
-              "SHA256SUMS.txt"
-          else
-            gh release create v1.0.27 \
-              --title "Windhawk 汉化补丁 v1.0.27" \
-              --notes-file "RELEASE_NOTES_v1.0.27.md" \
-              "Windhawk-patch-v1.0.27.zip" \
-              "package/windhawk-zh-cn.js" \
-              "package/install.ps1" \
-              "package/uninstall.ps1" \
-              "package/一键安装.bat" \
-              "package/一键卸载.bat" \
-              "package/使用说明.txt" \
-              "SHA256SUMS.txt"
-          fi
+          gh issue create --repo "${{ github.repository }}" \
+            --title "发布失败日志（Actions 自动记录）" \
+            --body "$(tail -c 60000 /tmp/publish.log 2>/dev/null || echo no-log)" || true
