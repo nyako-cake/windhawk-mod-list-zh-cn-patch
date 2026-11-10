@@ -1,0 +1,64 @@
+name: publish
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 清掉没有 tag 的残留草稿
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ids=$(gh api "repos/${{ github.repository }}/releases" --jq '.[] | select(.draft == true) | .id' || true)
+          for id in $ids; do
+            echo "delete draft $id"
+            gh api -X DELETE "repos/${{ github.repository }}/releases/$id" || true
+          done
+
+      - name: 建 tag 并发布
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git rev-parse "v1.0.27" >/dev/null 2>&1; then
+            git tag -a v1.0.27 -m "Windhawk 汉化补丁 v1.0.27"
+          fi
+          git push origin refs/tags/v1.0.27
+          if gh release view v1.0.27 >/dev/null 2>&1; then
+            echo "release already exists, upload assets only"
+            gh release upload v1.0.27 --clobber \
+              "Windhawk-patch-v1.0.27.zip" \
+              "package/windhawk-zh-cn.js" \
+              "package/install.ps1" \
+              "package/uninstall.ps1" \
+              "package/一键安装.bat" \
+              "package/一键卸载.bat" \
+              "package/使用说明.txt" \
+              "SHA256SUMS.txt"
+          else
+            gh release create v1.0.27 \
+              --title "Windhawk 汉化补丁 v1.0.27" \
+              --notes-file "RELEASE_NOTES_v1.0.27.md" \
+              "Windhawk-patch-v1.0.27.zip" \
+              "package/windhawk-zh-cn.js" \
+              "package/install.ps1" \
+              "package/uninstall.ps1" \
+              "package/一键安装.bat" \
+              "package/一键卸载.bat" \
+              "package/使用说明.txt" \
+              "SHA256SUMS.txt"
+          fi
